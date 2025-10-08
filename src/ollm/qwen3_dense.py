@@ -87,14 +87,23 @@ class loaderLayer:
 
 
 class MyQwen3MLP(Qwen3MLP, loaderLayer):
+    # def forward(self, x):
+    #     if hasattr(self, "expert_idx"):
+    #         self._load_expert_weights()
+    #     out = super().forward(x)
+    #     if hasattr(self, "expert_idx"):
+    #         self._unload_expert_weights()
+    #     return out
     def forward(self, x):
-        if hasattr(self, "expert_idx"):
-            self._load_expert_weights()
-        out = super().forward(x)
-        if hasattr(self, "expert_idx"):
-            self._unload_expert_weights()
-        return out
-
+        chunk_size, chunks = 16384, []  #copied from llama3
+        x = x.squeeze(0)
+        for i in range(0, x.shape[0], chunk_size):
+            gate_chunk = self.act_fn(self.gate_proj(x[i:i+chunk_size]))
+            up_chunk = self.up_proj(x[i:i+chunk_size])
+            out_chunk = self.down_proj(gate_chunk * up_chunk)
+            chunks.append(out_chunk)
+        down_proj = torch.cat(chunks, dim=0).unsqueeze(0)
+        return down_proj
 
 class MyQwen3DecoderLayer(Qwen3DecoderLayer, loaderLayer):
     def __init__(self, config, layer_idx):

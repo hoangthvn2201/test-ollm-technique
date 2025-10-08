@@ -374,7 +374,7 @@ class Gemma3Loader(MoEWeightsLoader2):
 
 #=========================================================================
 
-if __name__=="__main__":
-	q = GDSWeights("/media/mega4alik/ssd/models/gpt-oss-20B/gds_export/")
-	t = q.load_param_to_cuda("model.layers.0.self_attn.q_proj.weight")
-	print(t, t.dtype, t.shape)
+# if __name__=="__main__":
+# 	q = GDSWeights("/media/mega4alik/ssd/models/gpt-oss-20B/gds_export/")
+# 	t = q.load_param_to_cuda("model.layers.0.self_attn.q_proj.weight")
+# 	print(t, t.dtype, t.shape)
