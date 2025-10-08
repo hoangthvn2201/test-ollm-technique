@@ -71,7 +71,7 @@ class Inference:
 		print("loading model from", model_dir)
 		if self.model_id=="qwen3-1.7b":
 			from . import qwen3_dense
-			qwen3_dense.loader = GDSWeights(os.path.join(model_dir, "gds_export"))
+			qwen3_dense.loader = MoEWeightsLoader2(model_dir)
 			qwen3_dense.stats = self.stats
 			self.model = qwen3_dense.MyQwen3ForCausalLM.from_pretrained(model_dir, torch_dtype=torch.bfloat16, device_map=self.device, attn_implementation="flash_attention_2", low_cpu_mem_usage=True, ignore_mismatched_sizes=True)
 		elif self.model_id=="qwen3-next-80B":
