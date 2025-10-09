@@ -46,7 +46,7 @@ class Inference:
 	
 	def hf_download(self, model_dir):
 		from huggingface_hub import snapshot_download
-		urls = {"qwen3-1.7b":"Qwen/Qwen3-1.7B","qwen3-next-80B": "Qwen/Qwen3-Next-80B-A3B-Instruct", "gemma3-12B":"google/gemma-3-12b-it", "voxtral-small-24B":"mistralai/Voxtral-Small-24B-2507"}
+		urls = {"qwen3-4b":"Qwen/Qwen3-4B-Instruct-2507","qwen3-1.7b":"Qwen/Qwen3-1.7B","qwen3-next-80B": "Qwen/Qwen3-Next-80B-A3B-Instruct", "gemma3-12B":"google/gemma-3-12b-it", "voxtral-small-24B":"mistralai/Voxtral-Small-24B-2507"}
 		url = urls[self.model_id]
 		print(f"Downloading {url} ...")
 		snapshot_download(
@@ -57,13 +57,13 @@ class Inference:
 
 	
 	def ini_model(self, models_dir="./models/", force_download=False):
-		models_list = ["qwen3-1.7b","llama3-1B-chat", "llama3-3B-chat", "llama3-8B-chat", "gpt-oss-20B", "qwen3-next-80B", "gemma3-12B", "voxtral-small-24B"]
+		models_list = ["qwen3-4b","qwen3-1.7b","llama3-1B-chat", "llama3-3B-chat", "llama3-8B-chat", "gpt-oss-20B", "qwen3-next-80B", "gemma3-12B", "voxtral-small-24B"]
 		if self.model_id not in models_list:
 			raise ValueError("Incorrect model id. It must be one of", models_list)
 		
 		model_dir = os.path.join(models_dir, self.model_id)
 		if os.path.exists(model_dir)==False or force_download==True:
-			if self.model_id in ["qwen3-1.7b","qwen3-next-80B", "gemma3-12B", "voxtral-small-24B"]:
+			if self.model_id in ["qwen3-4b","qwen3-1.7b","qwen3-next-80B", "gemma3-12B", "voxtral-small-24B"]:
 				self.hf_download(model_dir)
 			else:
 				self.download_and_unpack(models_dir)
@@ -74,6 +74,11 @@ class Inference:
 			qwen3_dense.loader = MoEWeightsLoader2(model_dir)
 			qwen3_dense.stats = self.stats
 			self.model = qwen3_dense.MyQwen3ForCausalLM.from_pretrained(model_dir, torch_dtype=torch.bfloat16, device_map=self.device, attn_implementation="flash_attention_2", low_cpu_mem_usage=True, ignore_mismatched_sizes=True)
+		elif self.model_id=="qwen3-4b":
+			from . import qwen3_dense
+			qwen3_dense.loader = MoEWeightsLoader2(model_dir)
+			qwen3_dense.stats = self.stats
+			self.model = qwen3_dense.MyQwen3ForCausalLM.from_pretrained(model_dir, torch_dtype=torch.bfloat16, device_map=self.device, attn_implementation="flash_attention_2", low_cpu_mem_usage=True, ignore_mismatched_sizes=True)	
 		elif self.model_id=="qwen3-next-80B":
 			from . import qwen3_next
 			qwen3_next.loader = MoEWeightsLoader2(model_dir)
