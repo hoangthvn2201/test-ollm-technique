@@ -321,8 +321,16 @@ class MoEWeightsLoader2(MoEWeightsLoader): #qwen3_next safetensors
 		for manifest_name, filename in indexes["weight_map"].items():
 			match1 = re.search(r"(model\.layers\.\d+\.mlp\.experts\.\d+\.)", manifest_name)
 			match2 = re.search(r"(model\.layers\.\d+\.)", manifest_name)
+			match3 = re.search(r"(decoder\.block\.\d+\.)", manifest_name)
+			match4 = re.search(r"(encoder\.block\.\d+\.)", manifest_name)
 			if match1 or match2:
 				base = match1.group(1) if match1 else match2.group(1)
+				if base not in self.manifest: self.manifest[base] = {}
+				attr_path = manifest_name.replace(base, "")
+				self.manifest[base][attr_path] = filename
+				
+			elif match3 or match4:
+				base = match3.group(1) if match3 else match4.group(1)
 				if base not in self.manifest: self.manifest[base] = {}
 				attr_path = manifest_name.replace(base, "")
 				self.manifest[base][attr_path] = filename
