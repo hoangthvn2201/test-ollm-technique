@@ -73,7 +73,7 @@ class Inference:
 			from . import vit5
 			vit5.loader = T5WeightsLoader(model_dir)
 			vit5.stats = self.stats
-			self.model = vit5.MyT5ForConditionalGeneration.from_pretrained(model_dir, device_map=self.device, attn_implementation="flash_attention_2", low_cpu_mem_usage=True, ignore_mismatched_sizes=True)
+			self.model = vit5.MyT5ForConditionalGeneration.from_pretrained(model_dir, device_map=self.device, low_cpu_mem_usage=True, ignore_mismatched_sizes=True)
 		elif self.model_id=="qwen3-1.7b":
 			from . import qwen3_dense
 			qwen3_dense.loader = MoEWeightsLoader2(model_dir)
