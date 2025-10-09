@@ -378,3 +378,233 @@ class Gemma3Loader(MoEWeightsLoader2):
 # 	q = GDSWeights("/media/mega4alik/ssd/models/gpt-oss-20B/gds_export/")
 # 	t = q.load_param_to_cuda("model.layers.0.self_attn.q_proj.weight")
 # 	print(t, t.dtype, t.shape)
+import json, os, time, re
+import torch
+from typing import Dict, Optional
+
+class T5WeightsLoader:
+    """
+    Loader for T5 models using pytorch_model.bin format
+    Supports both single-file and sharded checkpoints
+    """
+    def __init__(self, path: str, device="cuda:0"):
+        self.path = path  # <model_dir>
+        self.device = torch.device(device)
+        self.offloaded_map = {}
+        self.manifest = {}
+        self.weights_cache = {}  # Cache loaded checkpoint
+        
+        # Detect checkpoint format
+        self._detect_and_load_manifest()
+    
+    def _detect_and_load_manifest(self):
+        """Detect if model is single-file or sharded"""
+        single_file = os.path.join(self.path, "pytorch_model.bin")
+        index_file = os.path.join(self.path, "pytorch_model.bin.index.json")
+        
+        if os.path.exists(index_file):
+            # Sharded checkpoint
+            print("✓ Detected sharded T5 checkpoint")
+            self._load_sharded_manifest(index_file)
+        elif os.path.exists(single_file):
+            # Single file checkpoint
+            print("✓ Detected single-file T5 checkpoint")
+            self._load_single_file_manifest(single_file)
+        else:
+            raise FileNotFoundError(
+                f"No pytorch_model.bin or pytorch_model.bin.index.json found in {self.path}"
+            )
+    
+    def _load_single_file_manifest(self, checkpoint_path):
+        """
+        Load manifest from single pytorch_model.bin file
+        Maps parameter names to their location
+        """
+        print(f"Loading checkpoint metadata from {checkpoint_path}...")
+        
+        # Load checkpoint to CPU to inspect keys (lightweight operation)
+        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+        
+        # Build manifest by grouping parameters by encoder/decoder blocks
+        for param_name in checkpoint.keys():
+            # Match encoder blocks: encoder.block.{i}.*
+            match_encoder = re.search(r"(encoder\.block\.\d+\.)", param_name)
+            # Match decoder blocks: decoder.block.{i}.*
+            match_decoder = re.search(r"(decoder\.block\.\d+\.)", param_name)
+            
+            if match_encoder:
+                base = match_encoder.group(1)
+                if base not in self.manifest:
+                    self.manifest[base] = {}
+                attr_path = param_name.replace(base, "")
+                self.manifest[base][attr_path] = {
+                    "file": "pytorch_model.bin",
+                    "param_name": param_name
+                }
+            elif match_decoder:
+                base = match_decoder.group(1)
+                if base not in self.manifest:
+                    self.manifest[base] = {}
+                attr_path = param_name.replace(base, "")
+                self.manifest[base][attr_path] = {
+                    "file": "pytorch_model.bin",
+                    "param_name": param_name
+                }
+            else:
+                # Shared parameters (embeddings, final layer norm, lm_head)
+                # Store under special "shared" key
+                if "shared" not in self.manifest:
+                    self.manifest["shared"] = {}
+                self.manifest["shared"][param_name] = {
+                    "file": "pytorch_model.bin",
+                    "param_name": param_name
+                }
+        
+        # Cache the checkpoint in memory (will be used repeatedly)
+        self.weights_cache["pytorch_model.bin"] = checkpoint
+        
+        print(f"✓ Loaded manifest: {len(self.manifest)} block groups")
+        print(f"  - Encoder blocks: {sum(1 for k in self.manifest if k.startswith('encoder'))}")
+        print(f"  - Decoder blocks: {sum(1 for k in self.manifest if k.startswith('decoder'))}")
+    
+    def _load_sharded_manifest(self, index_path):
+        """
+        Load manifest from sharded checkpoint (multiple .bin files)
+        """
+        with open(index_path) as f:
+            index = json.load(f)
+        
+        weight_map = index["weight_map"]
+        
+        for param_name, filename in weight_map.items():
+            # Match encoder/decoder blocks
+            match_encoder = re.search(r"(encoder\.block\.\d+\.)", param_name)
+            match_decoder = re.search(r"(decoder\.block\.\d+\.)", param_name)
+            
+            if match_encoder:
+                base = match_encoder.group(1)
+                if base not in self.manifest:
+                    self.manifest[base] = {}
+                attr_path = param_name.replace(base, "")
+                self.manifest[base][attr_path] = {
+                    "file": filename,
+                    "param_name": param_name
+                }
+            elif match_decoder:
+                base = match_decoder.group(1)
+                if base not in self.manifest:
+                    self.manifest[base] = {}
+                attr_path = param_name.replace(base, "")
+                self.manifest[base][attr_path] = {
+                    "file": filename,
+                    "param_name": param_name
+                }
+            else:
+                if "shared" not in self.manifest:
+                    self.manifest["shared"] = {}
+                self.manifest["shared"][param_name] = {
+                    "file": filename,
+                    "param_name": param_name
+                }
+        
+        print(f"✓ Loaded sharded manifest: {len(self.manifest)} block groups")
+    
+    def preload_layer_safetensors(self, base: str):
+        """
+        Preload checkpoint file for this layer
+        (Named 'preload_layer_safetensors' for compatibility, but loads .bin files)
+        """
+        if base not in self.manifest:
+            return
+        
+        # Get unique files needed for this base
+        files_needed = set()
+        for attr_info in self.manifest[base].values():
+            files_needed.add(attr_info["file"])
+        
+        # Load checkpoint files if not already cached
+        for filename in files_needed:
+            if filename not in self.weights_cache:
+                filepath = os.path.join(self.path, filename)
+                print(f"  Loading {filename}...")
+                self.weights_cache[filename] = torch.load(
+                    filepath, 
+                    map_location="cpu",
+                    weights_only=False
+                )
+    
+    def load_dict_to_cuda(self, base: str) -> Dict[str, torch.Tensor]:
+        """
+        Load all parameters for a specific block (encoder.block.{i} or decoder.block.{i})
+        Returns dict mapping attr_path -> tensor on GPU
+        """
+        # Check if offloaded to CPU/GPU
+        cached = self.get_offloaded_dict_to_cuda(base)
+        if cached:
+            return cached
+        
+        # Load from disk
+        return self.load_dict_from_disk(base, device=self.device)
+    
+    def load_dict_from_disk(self, base: str, device='cpu') -> Dict[str, torch.Tensor]:
+        """Load parameters from checkpoint file(s)"""
+        if base not in self.manifest:
+            return {}
+        
+        result = {}
+        for attr_path, meta in self.manifest[base].items():
+            filename = meta["file"]
+            param_name = meta["param_name"]
+            
+            # Get checkpoint (should be cached)
+            if filename not in self.weights_cache:
+                filepath = os.path.join(self.path, filename)
+                self.weights_cache[filename] = torch.load(
+                    filepath,
+                    map_location="cpu",
+                    weights_only=False
+                )
+            
+            checkpoint = self.weights_cache[filename]
+            
+            if param_name in checkpoint:
+                tensor = checkpoint[param_name].to(device)
+                result[attr_path] = tensor
+            else:
+                print(f"Warning: {param_name} not found in {filename}")
+        
+        return result
+    
+    def offload_dict_to_gpu_cpu(self, base: str, gpu=False):
+        """Offload block weights to CPU or GPU RAM"""
+        device = self.device if gpu else 'cpu'
+        d = self.load_dict_from_disk(base, device=device)
+        self.offloaded_map[base] = d
+        print(f"  Offloaded {base} to {'GPU' if gpu else 'CPU'}: {len(d)} parameters")
+    
+    def get_offloaded_dict_to_cuda(self, base: str) -> Optional[Dict[str, torch.Tensor]]:
+        """Get offloaded weights and move to CUDA if needed"""
+        if base in self.offloaded_map:
+            d = self.offloaded_map[base]
+            d2 = {}
+            for attr_path, tensor in d.items():
+                if tensor.device != self.device:
+                    d2[attr_path] = tensor.to(self.device, non_blocking=True)
+                else:
+                    d2[attr_path] = tensor
+            return d2
+        return None
+    
+    def load_shared_params(self) -> Dict[str, torch.Tensor]:
+        """
+        Load shared parameters (embeddings, layer norms, lm_head)
+        These are loaded once and kept in memory
+        """
+        if "shared" not in self.manifest:
+            return {}
+        
+        return self.load_dict_from_disk("shared", device=self.device)
+    
+    def clear_cache(self):
+        """Clear checkpoint file cache to free memory"""
+        self.weights_cache.clear()
