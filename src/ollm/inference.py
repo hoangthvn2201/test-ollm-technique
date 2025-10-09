@@ -71,7 +71,7 @@ class Inference:
 		print("loading model from", model_dir)
 		if self.model_id=="daohuyen-vit5":
 			from . import vit5
-			vit5.loader = T5WeightsLoader(model_dir)
+			vit5.loader = MoEWeightsLoader2(model_dir)
 			vit5.stats = self.stats
 			self.model = vit5.MyT5ForConditionalGeneration.from_pretrained(model_dir, device_map=self.device, low_cpu_mem_usage=True, ignore_mismatched_sizes=True)
 	
